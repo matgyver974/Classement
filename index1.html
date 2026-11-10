@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classement du tournoi</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a2e;--card:#f3f4f8;--ac:#6d28d9;--acfg:#fff;--bd:#d9dbe4;--mut:#666}
+@media (prefers-color-scheme:dark){:root{--bg:#12121c;--fg:#eee;--card:#1e1e2e;--ac:#8b5cf6;--bd:#33354a;--mut:#999}}
+body{margin:0 auto;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;padding:12px;max-width:900px}
+h1{font-size:1.4rem;margin:8px 0}
+nav{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+nav button,.btn{background:var(--card);color:var(--fg);border:1px solid var(--bd);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:.9rem}
+nav button.on{background:var(--ac);color:var(--acfg);border-color:var(--ac)}
+.wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}
+th,td{padding:6px 8px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--card)}
+input,textarea{background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:5px;font:inherit}
+input:disabled,textarea:disabled{opacity:.6}
+td input[type=number]{width:70px}
+.rank1{color:#d4a017;font-weight:700}.tot{font-weight:700;color:var(--ac)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.mut{color:var(--mut);font-size:.85rem}
+.badge{font-size:.75rem;padding:3px 8px;border-radius:99px;background:var(--card);border:1px solid var(--bd)}
+textarea{width:100%;height:160px;box-sizing:border-box}
+#login{display:none}
+</style>
+</head>
+<body>
+<h1>🏆 Classement du tournoi <span class="badge" id="role">Lecture seule</span></h1>
+<div class="row"><button class="btn" id="lb">Connexion organisateur</button></div>
+<div class="row" id="login"><input id="em" type="email" placeholder="E-mail organisateur" autocomplete="username"><input id="pw" type="password" placeholder="Mot de passe" autocomplete="current-password"><button class="btn" id="go">Entrer</button></div>
+<p class="mut" id="rule"></p>
+<p class="mut" id="msg"></p>
+<div class="row" id="sbox"><input id="q" type="search" placeholder="🔍 Cherche ton pseudo…" autocomplete="off" style="flex:1;min-width:200px"></div>
+<nav id="nav"></nav>
+<div id="view"></div>
+<p class="mut" style="margin-top:24px">Version 7</p>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+/* ====== ÉTAPE : colle ici la configuration Firebase de ton projet ====== */
+var FIREBASE_CONFIG={
+  apiKey:"AIzaSyBPhS4vnbzLKp9F1MzT44ek3kHvFeGMjGE",
+  authDomain:"classement-23a1a.firebaseapp.com",
+  projectId:"classement-23a1a",
+  appId:"1:401414890437:web:f45c0bda4267e944f3a1ac"
+};
+/* ======================================================================= */
+var G=6,N=100;
+var cfg={killPts:2,topN:50},P=[],admin=false,tab="rank",db=null,auth=null,pend={},timers={};
+for(var i=0;i<N;i++)P.push({id:"p"+String(i).padStart(3,"0"),n:"Joueur "+(i+1),k:Array(G).fill(""),p:Array(G).fill("")});
+function pp(p){p=parseInt(p);if(!(p>=1&&p<=cfg.topN))return 0;if(p==1)return 60;if(p==2)return 53;if(p==3)return 49;return cfg.topN+1-p}
+function kp(k){return(parseInt(k)||0)*cfg.killPts}
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
+var query="";
+function norm(s){return String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"")}
+function note(t){document.getElementById("msg").textContent=t||""}
+function scores(){
+  return P.map(function(x){
+    var t=0,k=0,w=0,per=[];
+    for(var g=0;g<G;g++){var pts=pp(x.p[g])+kp(x.k[g]);per.push(pts);t+=pts;k+=parseInt(x.k[g])||0;if(parseInt(x.p[g])===1)w++;}
+    return{n:x.n,t:t,k:k,w:w,per:per};
+  }).sort(function(a,b){return b.t-a.t||b.k-a.k||b.w-a.w||a.n.localeCompare(b.n)});
+}
+function w(i,f){
+  if(!db||!admin)return;
+  pend[i]=Object.assign(pend[i]||{},f);
+  clearTimeout(timers[i]);
+  timers[i]=setTimeout(function(){
+    var d=pend[i];pend[i]=null;
+    db.collection("players").doc(P[i].id).set(d,{merge:true}).catch(function(e){note("Erreur d’enregistrement : "+(e.code||e.message))});
+  },400);
+}
+function apply(id,d){
+  var i=parseInt(id.slice(1));if(!P[i])return;var x=P[i];
+  if(d.n)x.n=d.n;
+  for(var g=0;g<G;g++){
+    if(!(pend[i]&&("k"+g) in pend[i]))x["k"][g]=d["k"+g]==null?"":String(d["k"+g]);
+    if(!(pend[i]&&("p"+g) in pend[i]))x["p"][g]=d["p"+g]==null?"":String(d["p"+g]);
+  }
+}
+function start(){
+  if(FIREBASE_CONFIG.apiKey.indexOf("COLLE")===0){note("Configuration Firebase manquante : suis le mode d’emploi.");render();return}
+  firebase.initializeApp(FIREBASE_CONFIG);
+  auth=firebase.auth();db=firebase.firestore();
+  auth.onAuthStateChanged(function(u){
+    admin=!!u;
+    document.getElementById("role").textContent=admin?"Organisateur":"Lecture seule";
+    document.getElementById("lb").textContent=admin?"Déconnexion":"Connexion organisateur";
+    document.getElementById("login").style.display="none";
+    render();
+  });
+  db.collection("players").onSnapshot(function(s){
+    s.forEach(function(d){apply(d.id,d.data())});refresh();
+  },function(){note("Impossible de lire les données.")});
+  db.collection("config").doc("main").onSnapshot(function(s){
+    if(s.exists){var d=s.data();cfg.killPts=+d.killPts||0;cfg.topN=Math.min(100,Math.max(1,+d.topN||50));}
+    refresh();
+  });
+}
+
+document.getElementById("lb").onclick=function(){
+  if(!auth){note("Firebase non configuré.");return}
+  if(admin)auth.signOut();
+  else{var l=document.getElementById("login");l.style.display=l.style.display=="flex"?"none":"flex"}
+};
+document.getElementById("go").onclick=function(){
+  auth.signInWithEmailAndPassword(document.getElementById("em").value.trim(),document.getElementById("pw").value)
+    .then(function(){note("")}).catch(function(e){note("Erreur de connexion : "+(e.code||e.message))});
+};
+function nav(){
+  var h='<button data-t="rank" class="'+(tab=="rank"?"on":"")+'">Classement</button>';
+  for(var g=0;g<G;g++)h+='<button data-t="'+g+'" class="'+(tab==""+g?"on":"")+'">Manche '+(g+1)+'</button>';
+  h+='<button data-t="set" class="'+(tab=="set"?"on":"")+'">Joueurs</button>';
+  var el=document.getElementById("nav");el.innerHTML=h;
+  document.getElementById("sbox").style.display=tab=="rank"?"flex":"none";
+  el.onclick=function(e){var t=e.target.getAttribute("data-t");if(t!==null){tab=t;render();}};
+  document.getElementById("rule").textContent="Barème : "+cfg.killPts+" pts par kill · top "+cfg.topN+" = 1 pt, puis +1 pt par place gagnée · top 3 = +2, top 2 = +4, top 1 = +7.";
+}
+function refresh(){
+  if(tab=="rank"){render();return}
+  if(tab=="set")return;
+  var g=parseInt(tab),a=document.activeElement;
+  for(var i=0;i<N;i++){
+    var ip=document.getElementById("pl"+i),ik=document.getElementById("kl"+i);
+    if(ip&&ip!==a)ip.value=P[i].p[g];
+    if(ik&&ik!==a)ik.value=P[i].k[g];
+    var c=document.getElementById("pt"+i);if(c)c.textContent=pp(P[i].p[g])+kp(P[i].k[g]);
+  }
+}
+function render(){
+  nav();var v=document.getElementById("view"),h="",dis=admin?"":" disabled";
+  v.oninput=null;
+  if(tab=="rank"){
+    var sc=scores();
+    h='<div class="row"><button class="btn" id="csv">Copier en CSV</button><span class="mut">Égalité de points : départage par kills.</span></div><div class="wrap"><table><tr><th>#</th><th>Joueur</th>';
+    for(var g=0;g<G;g++)h+='<th>M'+(g+1)+'</th>';
+    h+='<th>Top 1</th><th>Kills</th><th>Total</th></tr>';
+    var shown=0;
+    sc.forEach(function(s,i){
+      if(query&&norm(s.n).indexOf(query)<0)return;
+      shown++;
+      h+='<tr><td class="'+(i==0?"rank1":"")+'">'+(i+1)+'</td><td>'+esc(s.n)+'</td>';
+      s.per.forEach(function(p){h+='<td>'+p+'</td>'});
+      h+='<td>'+s.w+'</td><td>'+s.k+'</td><td class="tot">'+s.t+'</td></tr>';
+    });
+    if(!shown)h+='<tr><td colspan="'+(G+5)+'">Aucun joueur trouvé.</td></tr>';
+    h+='</table></div>';v.innerHTML=h;
+    document.getElementById("csv").onclick=function(){
+      var t="Rang;Joueur;M1;M2;M3;M4;M5;M6;Top1;Kills;Total\n";
+      sc.forEach(function(s,i){t+=(i+1)+";"+s.n+";"+s.per.join(";")+";"+s.w+";"+s.k+";"+s.t+"\n"});
+      try{navigator.clipboard.writeText(t);alert("CSV copié !");}catch(e){prompt("Copie ce texte :",t);}
+    };
+  }else if(tab=="set"){
+    h='<div class="row"><label>Points par kill <input type="number" id="kp" value="'+cfg.killPts+'" min="0" style="width:70px"'+dis+'></label><label>Top max <input type="number" id="tn" value="'+cfg.topN+'" min="1" max="100" style="width:70px"'+dis+'></label></div>';
+    h+='<p class="mut">Noms des joueurs (un par ligne, 100 maximum) :</p><textarea id="names"'+dis+'>'+esc(P.map(function(x){return x.n}).join("\n"))+'</textarea>';
+    if(admin)h+='<div class="row"><button class="btn" id="ok">Enregistrer</button></div>';
+    else h+='<p class="mut">Lecture seule : seuls les organisateurs peuvent modifier.</p>';
+    v.innerHTML=h;
+    if(admin){
+      document.getElementById("ok").onclick=function(){
+        var a=Math.max(0,parseInt(document.getElementById("kp").value)||0);
+        var tn=Math.min(100,Math.max(1,parseInt(document.getElementById("tn").value)||50));
+        var l=document.getElementById("names").value.split("\n");
+        var bt=db.batch(),nm=[];
+        bt.set(db.collection("config").doc("main"),{killPts:a,topN:tn});
+        for(var i=0;i<N;i++){var x=(l[i]||"").trim()||("Joueur "+(i+1));nm.push(x);bt.set(db.collection("players").doc(P[i].id),{n:x},{merge:true});}
+        bt.commit().then(function(){for(var i=0;i<N;i++)P[i].n=nm[i];alert("Enregistré !");})
+          .catch(function(e){alert("Échec de l’enregistrement : "+(e.code||e.message)+"\nVérifie que tu es connecté en organisateur et que les règles Firestore autorisent l’écriture.")});
+      };
+
+    }
+  }else{
+    var g=parseInt(tab);
+    h='<p class="mut">Entre la place finale de chaque joueur (ex. 40 pour top 40) et ses kills. Place 1 = Top 1.</p><div class="wrap"><table><tr><th>Joueur</th><th>Placement</th><th>Kills</th><th>Pts</th></tr>';
+    for(var i=0;i<N;i++){
+      h+='<tr><td>'+esc(P[i].n)+'</td><td><input id="pl'+i+'" type="number" min="1" max="100" data-f="p" data-i="'+i+'" value="'+P[i].p[g]+'"'+dis+'></td><td><input id="kl'+i+'" type="number" min="0" data-f="k" data-i="'+i+'" value="'+P[i].k[g]+'"'+dis+'></td><td id="pt'+i+'">'+(pp(P[i].p[g])+kp(P[i].k[g]))+'</td></tr>';
+    }
+    h+='</table></div>';v.innerHTML=h;
+    v.oninput=function(e){
+      var f=e.target.getAttribute("data-f");if(!f)return;
+      var i=+e.target.getAttribute("data-i");
+      P[i][f][g]=e.target.value;
+      var o={};o[f+g]=e.target.value;w(i,o);
+      document.getElementById("pt"+i).textContent=pp(P[i].p[g])+kp(P[i].k[g]);
+    };
+  }
+}
+document.getElementById("q").oninput=function(){query=norm(this.value.trim());render()};
+render();
+start();
+</script>
+</body>
+</html>
