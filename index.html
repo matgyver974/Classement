@@ -70,7 +70,7 @@ function w(i,f){
   clearTimeout(timers[i]);
   timers[i]=setTimeout(function(){
     var d=pend[i];pend[i]=null;
-    db.collection("players").doc(P[i].id).set(d,{merge:true}).catch(function(){note("Erreur d’enregistrement : reconnecte-toi en organisateur.")});
+    db.collection("players").doc(P[i].id).set(d,{merge:true}).catch(function(e){note("Erreur d’enregistrement : "+(e.code||e.message))});
   },400);
 }
 function apply(id,d){
@@ -163,10 +163,12 @@ function render(){
       document.getElementById("ok").onclick=function(){
         var a=Math.max(0,parseInt(document.getElementById("kp").value)||0);
         var tn=Math.min(100,Math.max(1,parseInt(document.getElementById("tn").value)||50));
-        db.collection("config").doc("main").set({killPts:a,topN:tn});
         var l=document.getElementById("names").value.split("\n");
-        for(var i=0;i<N;i++){var x=(l[i]||"").trim()||("Joueur "+(i+1));if(x!==P[i].n){P[i].n=x;w(i,{n:x});}}
-        alert("Enregistré !");
+        var bt=db.batch(),nm=[];
+        bt.set(db.collection("config").doc("main"),{killPts:a,topN:tn});
+        for(var i=0;i<N;i++){var x=(l[i]||"").trim()||("Joueur "+(i+1));nm.push(x);bt.set(db.collection("players").doc(P[i].id),{n:x},{merge:true});}
+        bt.commit().then(function(){for(var i=0;i<N;i++)P[i].n=nm[i];alert("Enregistré !");})
+          .catch(function(e){alert("Échec de l’enregistrement : "+(e.code||e.message)+"\nVérifie que tu es connecté en organisateur et que les règles Firestore autorisent l’écriture.")});
       };
 
     }
